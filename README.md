@@ -1,6 +1,6 @@
 # wia-java-example
 
-A simple Hello World Java application built with Maven.
+A Hello World gRPC service implemented with gRPC-Java and Maven.
 
 ## Prerequisites
 
@@ -36,14 +36,44 @@ mvn -version
 
 ## Building and Running
 
-Compile the project:
+The `exec:java` goal does not automatically trigger compilation, so always chain
+`compile` before it. This also ensures the Java classes are generated from the
+proto file before they are needed.
+
+### Running the server
 
 ```bash
-mvn compile
+mvn compile exec:java -Dexec.mainClass=com.example.HelloWorldServer
 ```
 
-Run the application:
+The server listens on port `50051`.
+
+### Running the client
+
+In a separate terminal, with the server already running:
 
 ```bash
-mvn exec:java -Dexec.mainClass=com.example.App
+mvn compile exec:java -Dexec.mainClass=com.example.HelloWorldClient
 ```
+
+You can optionally pass a name as an argument:
+
+```bash
+mvn compile exec:java -Dexec.mainClass=com.example.HelloWorldClient -Dexec.args="Alice"
+```
+
+## Project Structure
+
+```
+src/
+├── main/
+│   ├── java/com/example/
+│   │   ├── GreeterImpl.java       # gRPC service implementation
+│   │   ├── HelloWorldServer.java  # Server entry point
+│   │   └── HelloWorldClient.java  # Client entry point
+│   └── proto/
+│       └── helloworld.proto       # Service definition
+```
+
+Java classes for the proto messages and service stub are generated into
+`target/generated-sources/` during `mvn compile` and are not committed to source control.
