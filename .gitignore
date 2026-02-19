@@ -1,0 +1,13 @@
+# Maven
+target/
+
+# IDE
+.idea/
+*.iml
+.eclipse
+.settings/
+.classpath
+.project
+
+# OS
+.DS_Store
