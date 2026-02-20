@@ -10,6 +10,7 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.net.Socket;
 import java.security.KeyStore;
+import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
 import java.util.concurrent.TimeUnit;
@@ -38,10 +39,9 @@ public class HelloWorldClient {
         System.out.println("Greeting: " + response.getMessage());
     }
 
-    // SPIFFE certificates carry identity in a URI SAN, not a DNS SAN, so standard
-    // TLS hostname verification always fails. This trust manager validates the
-    // certificate chain against the CA but skips hostname verification, which is
-    // the correct trust model for SPIFFE workload identity.
+    // Validates the server certificate chain against the CA, skips hostname
+    // verification (SPIFFE certs use URI SANs, not DNS SANs), and enforces that
+    // the server presents the expected SPIFFE URI in its certificate's URI SAN.
     private static X509ExtendedTrustManager spiffeTrustManager(File caCertFile) throws Exception {
         var cf = CertificateFactory.getInstance("X.509");
         var caCert = (X509Certificate) cf.generateCertificate(new FileInputStream(caCertFile));
@@ -53,16 +53,19 @@ public class HelloWorldClient {
         var delegate = (X509TrustManager) tmf.getTrustManagers()[0];
 
         return new X509ExtendedTrustManager() {
-            public void checkClientTrusted(X509Certificate[] c, String a) throws java.security.cert.CertificateException { delegate.checkClientTrusted(c, a); }
-            public void checkServerTrusted(X509Certificate[] c, String a) throws java.security.cert.CertificateException { delegate.checkServerTrusted(c, a); }
+            public void checkClientTrusted(X509Certificate[] c, String a) throws CertificateException { delegate.checkClientTrusted(c, a); }
+            public void checkServerTrusted(X509Certificate[] c, String a) throws CertificateException {
+                delegate.checkServerTrusted(c, a);
+                SpiffeValidator.verifySpiffeUri(c[0]);
+            }
             public X509Certificate[] getAcceptedIssuers() { return delegate.getAcceptedIssuers(); }
-            // 3-arg overloads receive an SSLEngine/Socket and are where hostname verification
-            // is injected. Delegating to the 2-arg versions skips hostname checking while
-            // still validating the certificate chain.
-            public void checkClientTrusted(X509Certificate[] c, String a, Socket s) throws java.security.cert.CertificateException { delegate.checkClientTrusted(c, a); }
-            public void checkServerTrusted(X509Certificate[] c, String a, Socket s) throws java.security.cert.CertificateException { delegate.checkServerTrusted(c, a); }
-            public void checkClientTrusted(X509Certificate[] c, String a, SSLEngine e) throws java.security.cert.CertificateException { delegate.checkClientTrusted(c, a); }
-            public void checkServerTrusted(X509Certificate[] c, String a, SSLEngine e) throws java.security.cert.CertificateException { delegate.checkServerTrusted(c, a); }
+            // 3-arg overloads are where hostname verification is injected by the SSL engine.
+            // checkServerTrusted delegates to our 2-arg version to skip hostname checking
+            // while still enforcing CA chain validation and the SPIFFE URI check.
+            public void checkClientTrusted(X509Certificate[] c, String a, Socket s) throws CertificateException { delegate.checkClientTrusted(c, a); }
+            public void checkServerTrusted(X509Certificate[] c, String a, Socket s) throws CertificateException { checkServerTrusted(c, a); }
+            public void checkClientTrusted(X509Certificate[] c, String a, SSLEngine e) throws CertificateException { delegate.checkClientTrusted(c, a); }
+            public void checkServerTrusted(X509Certificate[] c, String a, SSLEngine e) throws CertificateException { checkServerTrusted(c, a); }
         };
     }
 
