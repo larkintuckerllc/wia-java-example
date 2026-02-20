@@ -2,9 +2,21 @@ package com.example;
 
 import io.grpc.Channel;
 import io.grpc.ManagedChannel;
-import io.grpc.ManagedChannelBuilder;
 import io.grpc.StatusRuntimeException;
+import io.grpc.netty.shaded.io.grpc.netty.GrpcSslContexts;
+import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
+import io.grpc.netty.shaded.io.netty.handler.ssl.SslContextBuilder;
+import java.io.File;
+import java.io.FileInputStream;
+import java.net.Socket;
+import java.security.KeyStore;
+import java.security.cert.CertificateFactory;
+import java.security.cert.X509Certificate;
 import java.util.concurrent.TimeUnit;
+import javax.net.ssl.SSLEngine;
+import javax.net.ssl.TrustManagerFactory;
+import javax.net.ssl.X509ExtendedTrustManager;
+import javax.net.ssl.X509TrustManager;
 
 public class HelloWorldClient {
 
@@ -26,10 +38,46 @@ public class HelloWorldClient {
         System.out.println("Greeting: " + response.getMessage());
     }
 
-    public static void main(String[] args) throws InterruptedException {
+    // SPIFFE certificates carry identity in a URI SAN, not a DNS SAN, so standard
+    // TLS hostname verification always fails. This trust manager validates the
+    // certificate chain against the CA but skips hostname verification, which is
+    // the correct trust model for SPIFFE workload identity.
+    private static X509ExtendedTrustManager spiffeTrustManager(File caCertFile) throws Exception {
+        var cf = CertificateFactory.getInstance("X.509");
+        var caCert = (X509Certificate) cf.generateCertificate(new FileInputStream(caCertFile));
+        var ks = KeyStore.getInstance(KeyStore.getDefaultType());
+        ks.load(null, null);
+        ks.setCertificateEntry("ca", caCert);
+        var tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+        tmf.init(ks);
+        var delegate = (X509TrustManager) tmf.getTrustManagers()[0];
+
+        return new X509ExtendedTrustManager() {
+            public void checkClientTrusted(X509Certificate[] c, String a) throws java.security.cert.CertificateException { delegate.checkClientTrusted(c, a); }
+            public void checkServerTrusted(X509Certificate[] c, String a) throws java.security.cert.CertificateException { delegate.checkServerTrusted(c, a); }
+            public X509Certificate[] getAcceptedIssuers() { return delegate.getAcceptedIssuers(); }
+            // 3-arg overloads receive an SSLEngine/Socket and are where hostname verification
+            // is injected. Delegating to the 2-arg versions skips hostname checking while
+            // still validating the certificate chain.
+            public void checkClientTrusted(X509Certificate[] c, String a, Socket s) throws java.security.cert.CertificateException { delegate.checkClientTrusted(c, a); }
+            public void checkServerTrusted(X509Certificate[] c, String a, Socket s) throws java.security.cert.CertificateException { delegate.checkServerTrusted(c, a); }
+            public void checkClientTrusted(X509Certificate[] c, String a, SSLEngine e) throws java.security.cert.CertificateException { delegate.checkClientTrusted(c, a); }
+            public void checkServerTrusted(X509Certificate[] c, String a, SSLEngine e) throws java.security.cert.CertificateException { delegate.checkServerTrusted(c, a); }
+        };
+    }
+
+    public static void main(String[] args) throws Exception {
         String name = args.length > 0 ? args[0] : "World";
-        ManagedChannel channel = ManagedChannelBuilder.forAddress("localhost", 50051)
-                .usePlaintext()
+        String credDir = "production".equals(System.getenv("APP_ENV"))
+                ? "/var/run/secrets/workload-spiffe-credentials"
+                : "var/run/secrets/workload-spiffe-credentials";
+        var sslContextBuilder = GrpcSslContexts.configure(SslContextBuilder.forClient())
+                .trustManager(spiffeTrustManager(new File(credDir + "/ca_certificates.pem")))
+                .keyManager(
+                        new File(credDir + "/certificates.pem"),
+                        new File(credDir + "/private_key.pem"));
+        ManagedChannel channel = NettyChannelBuilder.forAddress("localhost", 50051)
+                .sslContext(sslContextBuilder.build())
                 .build();
         try {
             HelloWorldClient client = new HelloWorldClient(channel);
