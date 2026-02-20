@@ -1,0 +1,27 @@
+# Build stage
+FROM maven:3.9-eclipse-temurin-25 AS build
+WORKDIR /app
+
+# Copy pom.xml first so dependency downloads are cached as a separate layer
+COPY pom.xml .
+RUN mvn dependency:go-offline -q
+
+# Compile, run protoc code generation, and package
+COPY src ./src
+RUN mvn package -DskipTests dependency:copy-dependencies -DoutputDirectory=target/dependency
+
+# Run stage
+FROM eclipse-temurin:25
+WORKDIR /app
+
+COPY --from=build /app/target/wia-java-example-1.0-SNAPSHOT.jar app.jar
+COPY --from=build /app/target/dependency dependency/
+
+ENV APP_ENV=production
+
+# Credentials must be mounted at runtime:
+#   docker run -v /path/to/creds:/var/run/secrets/workload-spiffe-credentials ...
+# The optional CMD argument is the name to greet (defaults to "World"):
+#   docker run ... grpc-client Alice
+ENTRYPOINT ["java", "-cp", "app.jar:dependency/*", "com.example.HelloWorldClient"]
+CMD ["World"]

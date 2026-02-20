@@ -62,17 +62,70 @@ You can optionally pass a name as an argument:
 mvn compile exec:java -Dexec.mainClass=com.example.HelloWorldClient -Dexec.args="Alice"
 ```
 
+## Docker
+
+### Building the images
+
+```bash
+docker build -f Dockerfile.server -t grpc-server .
+docker build -f Dockerfile.client -t grpc-client .
+```
+
+### Running the containers
+
+The containers expect the SPIFFE credentials to be mounted at
+`/var/run/secrets/workload-spiffe-credentials`. The directory must contain:
+
+| File | Description |
+|---|---|
+| `ca_certificates.pem` | CA certificate used to verify peers |
+| `certificates.pem` | This workload's certificate |
+| `private_key.pem` | This workload's private key |
+
+Start the server, replacing `/path/to/creds` with the local directory containing
+the credential files:
+
+```bash
+docker run --rm \
+  -p 50051:50051 \
+  -v /path/to/creds:/var/run/secrets/workload-spiffe-credentials:ro \
+  grpc-server
+```
+
+In a separate terminal, run the client against the server container. The optional
+argument is the name to greet (defaults to `World`):
+
+```bash
+docker run --rm \
+  -v /path/to/creds:/var/run/secrets/workload-spiffe-credentials:ro \
+  grpc-client Alice
+```
+
+If the client and server are running in separate containers on the same host
+without a shared network, pass `--network host` so the client can reach the
+server on `localhost:50051`:
+
+```bash
+docker run --rm \
+  --network host \
+  -v /path/to/creds:/var/run/secrets/workload-spiffe-credentials:ro \
+  grpc-client Alice
+```
+
 ## Project Structure
 
 ```
-src/
-├── main/
-│   ├── java/com/example/
-│   │   ├── GreeterImpl.java       # gRPC service implementation
-│   │   ├── HelloWorldServer.java  # Server entry point
-│   │   └── HelloWorldClient.java  # Client entry point
-│   └── proto/
-│       └── helloworld.proto       # Service definition
+├── Dockerfile.client              # Client container image
+├── Dockerfile.server              # Server container image
+└── src/
+    └── main/
+        ├── java/com/example/
+        │   ├── GreeterImpl.java       # gRPC service implementation
+        │   ├── HelloWorldServer.java  # Server entry point
+        │   ├── HelloWorldClient.java  # Client entry point
+        │   └── SpiffeValidator.java   # SPIFFE URI verification
+        └── proto/
+            └── helloworld.proto       # Service definition
 ```
 
 Java classes for the proto messages and service stub are generated into
