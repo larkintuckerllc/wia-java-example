@@ -66,10 +66,46 @@ mvn compile exec:java -Dexec.mainClass=com.example.HelloWorldClient -Dexec.args=
 
 ### Building the images
 
+For local use only (current machine architecture):
+
 ```bash
 docker build -f Dockerfile.server -t grpc-server .
 docker build -f Dockerfile.client -t grpc-client .
 ```
+
+### Building and pushing multi-platform images
+
+To build images that run on both `amd64` and `arm64` (e.g. pushing to a registry
+for deployment on GKE), use `docker buildx`. Multi-platform images must be pushed
+directly to a registry and cannot be loaded into the local Docker daemon.
+
+Create a buildx builder the first time:
+
+```bash
+docker buildx create --name multiarch --use
+```
+
+Build and push:
+
+```bash
+docker buildx build \
+  --platform linux/amd64,linux/arm64 \
+  -f Dockerfile.server \
+  -t gcr.io/jtucker-wia-d/grpc-server:0.1.0 \
+  --push \
+  .
+
+docker buildx build \
+  --platform linux/amd64,linux/arm64 \
+  -f Dockerfile.client \
+  -t gcr.io/jtucker-wia-d/grpc-client:0.1.0 \
+  --push \
+  .
+```
+
+This pushes a manifest list to the registry containing a separate image variant
+for each architecture. Nodes automatically pull the correct variant for their
+architecture.
 
 ### Running the containers
 
@@ -110,6 +146,98 @@ docker run --rm \
   --network host \
   -v /path/to/creds:/var/run/secrets/workload-spiffe-credentials:ro \
   grpc-client Alice
+```
+
+## Kubernetes
+
+The server can be deployed as a Pod on GKE using the GKE Certificate Controller
+CSI driver to mount SPIFFE credentials automatically. The pod runs in the `debug`
+namespace under the `default` service account, matching the SPIFFE URI
+`spiffe://jtucker-wia-d.svc.id.goog/ns/debug/sa/default` embedded in the workload
+certificate. The `trustDomain` in the volume attribute must match the fleet trust
+domain configured in the cluster.
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  namespace: debug
+  name: grpc-server
+  labels:
+    app: grpc-server
+spec:
+  serviceAccountName: default
+  containers:
+  - name: grpc-server
+    image: gcr.io/jtucker-wia-d/grpc-server:0.1.0
+    ports:
+    - containerPort: 50051
+    volumeMounts:
+    - name: fleet-spiffe-credentials
+      mountPath: /var/run/secrets/workload-spiffe-credentials
+      readOnly: true
+  volumes:
+  - name: fleet-spiffe-credentials
+    csi:
+      driver: podcertificate.gke.io
+      volumeAttributes:
+        signerName: spiffe.gke.io/fleet-svid
+        trustDomain: fleet-project/svc.id.goog
+```
+
+### Service
+
+Create a Service to expose the server pod within the cluster. The selector
+matches the `app: grpc-server` label on the pod.
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  namespace: debug
+  name: grpc-server
+spec:
+  selector:
+    app: grpc-server
+  ports:
+  - port: 50051
+    targetPort: 50051
+```
+
+### Running the client as a Job
+
+The client can be run as a Kubernetes Job, which connects to the server pod and
+exits on completion.
+
+```yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  namespace: debug
+  name: grpc-client
+spec:
+  template:
+    spec:
+      serviceAccountName: default
+      restartPolicy: Never
+      containers:
+      - name: grpc-client
+        image: gcr.io/jtucker-wia-d/grpc-client:0.1.0
+        args: ["Alice"]
+        env:
+        - name: GRPC_SERVER_HOST
+          value: grpc-server
+        volumeMounts:
+        - name: fleet-spiffe-credentials
+          mountPath: /var/run/secrets/workload-spiffe-credentials
+          readOnly: true
+      volumes:
+      - name: fleet-spiffe-credentials
+        csi:
+          driver: podcertificate.gke.io
+          volumeAttributes:
+            signerName: spiffe.gke.io/fleet-svid
+            trustDomain: fleet-project/svc.id.goog
 ```
 
 ## Project Structure

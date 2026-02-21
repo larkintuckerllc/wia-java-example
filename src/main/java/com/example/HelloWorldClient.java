@@ -79,7 +79,8 @@ public class HelloWorldClient {
                 .keyManager(
                         new File(credDir + "/certificates.pem"),
                         new File(credDir + "/private_key.pem"));
-        ManagedChannel channel = NettyChannelBuilder.forAddress("localhost", 50051)
+        String host = System.getenv().getOrDefault("GRPC_SERVER_HOST", "localhost");
+        ManagedChannel channel = NettyChannelBuilder.forAddress(host, 50051)
                 .sslContext(sslContextBuilder.build())
                 .build();
         try {
